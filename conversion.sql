@@ -177,9 +177,100 @@ CREATE TABLE super_area AS
 		FROM paris_6_geom
 		)
 	SELECT row_number() over() as qgisid  , St_Multi(ST_CollectionExtract(dmp.geom,3) )::geometry(multipolygon,931008) AS barea
-	FROM barea , ST_Dump(barea) As dmp
+	FROM barea , ST_Dump(barea) As dmp ; 
 
 
 
 	
 
+----- starts here for geos usage
+-- version 2 : simplest, easiest, fastest
+
+/**
+--- we create building footprint ---
+the idea is to use buffer on segments from similar building
+so we have individual surfaces for each segment
+then we union  the surfaces for each building 
+we get polyogn with holes.
+Then we use only the exterior ring of polygon 
+then we use a negativ buffer of the same value than the first buffer
+we get a surface 
+*/
+DROP TABLE IF EXISTS test_simple; 
+CREATE TABLE test_simple AS
+SELECT gid, nombatimentsimple, footprint
+FROM (
+SELECT row_number() over() AS gid, nombatimentsimple, 
+ -- distinct 
+	ST_BUffer(
+	 ST_Buffer( 
+		ST_MakePolygon(
+	 	 ST_ExteriorRing(
+	--		ST_GeometryN(
+	--		ST_Multi( 
+		
+		ST_GeometryN(
+			ST_CollectionExtract(
+ 
+				ST_Multi( 
+					ST_Union(
+						ST_Buffer(line, +2.5)
+					)  
+				) 
+			, 3 )
+		,1)
+		))
+		 
+		,-2.6) -- ::geometry(polygon,931008)
+		, 0.1)
+		   AS footprint
+FROM paris_6_geom
+GROUP BY nombatimentsimple 
+) AS sub
+WHERE ST_Area(footprint) > 10 ; 
+
+
+
+/**
+--- we create city block ---
+ now spatially grouping 
+spatially aggregating of footprint
+
+same thing !
+*/
+
+DROP TABLE IF EXISTS  block_test_simple ; 
+CREATE TABLE block_test_simple AS 
+
+	WITh the_union AS(
+		SELECT 
+			ST_Union(
+			ST_Buffer(
+				footprint
+			, 1) -- the pramaeter define how close building should be inside a same city block
+			) AS unioned
+		FROM test_simple
+	)
+	--, city_block AS (
+	SELECT row_number() over() as city_block_id, St_MakePolygon(ST_ExteriorRing(ST_Buffer(dmp.geom,-1))) AS block
+	FROM the_union, ST_Dump(unioned) AS dmp
+	--)
+
+/**
+now we have footprint , we have city block,
+we must know in which city block is each footprint
+*/
+
+DROP TABLE IF EXISTS footprint_in_city_block ;
+CREATE TABLE footprint_in_city_block AS 
+
+	SELECT DISTINCT ON (nombatimentsimple) nombatimentsimple , footprint, city_block_id
+	FROM test_simple, block_test_simple
+	WHERE ST_INtersects(footprint, block) 
+	ORDER BY nombatimentsimple,  ST_Area(block) DESC; --the order is so that if a footprint is in several city_block, we attribute it to the biggest city block
+	 ;
+	
+
+
+
+ 
